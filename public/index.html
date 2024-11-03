@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Proximity Connection</title>
+</head>
+<body>
+  <h1>Device Connection Example</h1>
+  <div>Your Session ID: <span id="sessionID"></span></div>
+  <div>Other Device's Session ID: <span id="otherSessionID"></span></div>
+
+  <script>
+    const signalingServer = new WebSocket('ws://localhost:8080');
+    let localConnection, remoteConnection, dataChannel;
+
+    // Generate and save a unique session ID
+    let sessionID = localStorage.getItem('sessionID');
+    if (!sessionID) {
+      sessionID = 'session_' + Math.floor(Math.random() * 1000000);
+      localStorage.setItem('sessionID', sessionID);
+    }
+    document.getElementById('sessionID').innerText = sessionID;
+
+    // Start WebRTC connection
+    function startWebRTC() {
+      localConnection = new RTCPeerConnection();
+      dataChannel = localConnection.createDataChannel('sessionData');
+
+      dataChannel.onopen = () => {
+        console.log('Connection opened! Sending session ID:', sessionID);
+        dataChannel.send(sessionID);
+      };
+
+      // Display session ID received from the other device
+      dataChannel.onmessage = (event) => {
+        console.log('Received Session ID from other device:', event.data);
+        document.getElementById('otherSessionID').innerText = event.data;
+      };
+
+      // Send the offer to the signaling server
+      localConnection.onicecandidate = ({ candidate }) => {
+        if (candidate) {
+          signalingServer.send(JSON.stringify({ type: 'candidate', candidate }));
+        }
+      };
+
+      localConnection.createOffer().then((offer) => {
+        localConnection.setLocalDescription(offer);
+        signalingServer.send(JSON.stringify({ type: 'offer', offer }));
+      });
+    }
+
+    // Listen for messages from the signaling server
+    signalingServer.onmessage = async (message) => {
+      const data = JSON.parse(message.data);
+
+      if (data.type === 'offer') {
+        // Create a new peer connection if an offer is received
+        remoteConnection = new RTCPeerConnection();
+        remoteConnection.ondatachannel = (event) => {
+          event.channel.onmessage = (msg) => {
+            console.log('Other device session ID:', msg.data);
+            document.getElementById('otherSessionID').innerText = msg.data;
+          };
+        };
+
+        remoteConnection.onicecandidate = ({ candidate }) => {
+          if (candidate) {
+            signalingServer.send(JSON.stringify({ type: 'candidate', candidate }));
+          }
+        };
+
+        await remoteConnection.setRemoteDescription(data.offer);
+        const answer = await remoteConnection.createAnswer();
+        await remoteConnection.setLocalDescription(answer);
+        signalingServer.send(JSON.stringify({ type: 'answer', answer }));
+      } else if (data.type === 'answer') {
+        await localConnection.setRemoteDescription(data.answer);
+      } else if (data.type === 'candidate') {
+        const candidate = new RTCIceCandidate(data.candidate);
+        (localConnection || remoteConnection).addIceCandidate(candidate);
+      }
+    };
+
+    // Start WebRTC connection on load
+    startWebRTC();
+  </script>
+</body>
+</html>
